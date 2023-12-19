@@ -1,21 +1,28 @@
 import logging
 from typing import Tuple
 
-from tune import H_MAX, S_MAX, V_MAX
+from tune import H_MAX, S_MAX, V_MAX, segment
 
 import cv2
 from cv2.typing import MatLike
 import numpy as np
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.DEBUG)
 
 
 # Define constants
 PEBBLE_AREA_THRESHOLD = 3000
 ROCK_AREA_THRESHOLD = 5000
-DISPOSAL_THRESHOLD = 0
-AIRLOCK_THRESHOLD = float('inf')
+
+
+# Define corners
+TOP_LEFT_CORNER, TOP_RIGHT_CORNER, BOTTOM_LEFT_CORNER, BOTTOM_RIGHT_CORNER = range(4)
+cam_corner = BOTTOM_RIGHT_CORNER
+
+
+# Define debugging
+VERBOSE = False
+logging.basicConfig(level=logging.DEBUG if VERBOSE else logging.INFO)
 
 
 def getBound(
@@ -48,63 +55,18 @@ def getBound(
     return np.array([max(h - var, 0), 100, 100]), np.array([min(h + var, H_MAX), S_MAX, V_MAX])
 
 
-def segment(
-        image: MatLike,
-        lower: np.ndarray,
-        upper: np.ndarray,
-        invert: bool = False
-) -> MatLike:
-    """Perform colour segmentation on a given image based on a lower and upper bound.
-
-    Parameters
-    ----------
-    image : MatLike
-        The image to perform segmentation on.
-    lower : np.ndarray
-        The lower bound of the colour to detect.
-    upper : np.ndarray
-        The upper bound of the colour to detect.
-    invert : bool, default=False
-        True if the HSV image is to be inverted, False otherwise.
-
-    Returns
-    -------
-    MatLike
-        The segmentation mask of the image.
-    """
-
-    # Convert the image to HSV, and invert if needed
-    if invert:
-        hsv_image = cv2.cvtColor(cv2.bitwise_not(image), cv2.COLOR_BGR2HSV)
-    else:
-        hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-
-    # Segment the image with the lower and upper bounds as mask
-    mask = cv2.inRange(hsv_image, lower, upper)
-    return cv2.bitwise_and(image, image, mask=mask)
-
-
-def watershed(
-        mask: MatLike,
-        height: int,
-        width: int
-) -> Tuple[int, MatLike, MatLike, MatLike]:
+def watershed(mask: MatLike) -> Tuple[MatLike, MatLike, MatLike]:
     """Perform watershed algorithm to detect connected contour components.
 
     Parameters
     ----------
     mask : MatLike
         The colour segmentation mask of the given image.
-    height : int
-        The height of the image, in pixels.
-    width : int
-        The width of the image, in pixels.
 
     Returns
     -------
-    Tuple[int, MatLike, MatLike, MatLike]
-        The number of labels present in the watershed mask,
-        followed by the markers of each pixel,
+    Tuple[MatLike, MatLike, MatLike]
+        The markers of each pixel,
         followed by the statistics of each of the markers,
         followed by the centroids of each of the markers.
 
@@ -112,7 +74,10 @@ def watershed(
     --------
     https://stackoverflow.com/a/46084597
     https://docs.opencv.org/3.4/d3/dc0/group__imgproc__shape.html#ga107a78bf7cd25dec05fb4dfc5c9e765f
+    https://docs.opencv.org/3.4/d3/dc0/group__imgproc__shape.html#ga5ed7784614678adccb699c70fb841075
     """
+
+    global height, width
 
     # Perform Gaussian blur on mask
     blur = cv2.GaussianBlur(mask, (7, 7), 2)
@@ -148,13 +113,14 @@ def watershed(
     unknown = cv2.subtract(background, foreground)
 
     # Perform watershed algorithm and get all stats information
-    # Mark unknown regions as 0 and background regions as 1
-    num_labels, markers, stats, centroids = cv2.connectedComponentsWithStats(foreground)
+    # Mark unknown regions as -1 and background regions as 1
+    _, markers, stats, centroids = \
+        cv2.connectedComponentsWithStatsWithAlgorithm(foreground, 8, cv2.CV_32S, cv2.CCL_DEFAULT)
     markers += 1
     markers[unknown == 255] = 0
     markers = cv2.watershed(mask, markers)
 
-    return num_labels, markers, stats, centroids
+    return markers, stats, centroids
 
 
 def analyse(
@@ -162,8 +128,7 @@ def analyse(
         stats: MatLike,
         centroids: MatLike,
         area_threshold: int,
-        min_distance: int = 0,
-        max_distance: int = AIRLOCK_THRESHOLD
+        region: bool
 ) -> MatLike:
     """Count number of detected rocks in image.
 
@@ -184,10 +149,8 @@ def analyse(
         The centroid of each detected component.
     area_threshold : int
         The minimum area of valid components.
-    min_distance : int, default=`0`
-        The minimum distance from the corner of the playfield.
-    max_distance : int, default=`AIRLOCK_THRESHOLD`
-        The maximum distance from the corner of the playfield.
+    region : bool
+        True if to detect in disposal, False to detect in airlock.
 
     Returns
     -------
@@ -195,20 +158,25 @@ def analyse(
         The markers of each pixel after filtering.
     """
 
-    for i, (stat, centroid) in enumerate(zip(stats, centroids)):
-        if i < 2:
-            continue
+    global height, width, cam_x, cam_y
 
+    min_distance = (0 if region else width // 2) ** 2
+    max_distance = (width // 2 if region else width) ** 2
+
+    for marker, stat, centroid in zip(np.unique(markers)[1:], stats, centroids):
         # Obtain relevant statistics
         x, y = map(int, centroid)
         area = stat[cv2.CC_STAT_AREA]
 
         # Perform filtering
-        if not min_distance * min_distance <= x * x + y * y <= max_distance * max_distance or \
-                area < area_threshold:
-            #markers[markers == i] = 0
-            pass
-        logger.info('Contour %i: Position (%i, %i), Area: %f', i, x, y, area)
+        distance = (x - cam_x) * (x - cam_x) + (y - cam_y) * (y - cam_y)
+        if area < area_threshold or not min_distance <= distance <= max_distance:
+            markers[markers == marker] = -1
+        else:
+            logger.info(
+                'Contour %i: Position (%i, %i), Dist Squared %i, Area: %f',
+                marker, x, y, distance, area
+            )
 
     return markers
 
@@ -217,9 +185,7 @@ def show(
         image: MatLike,
         markers: MatLike,
         centroids: MatLike,
-        title: str,
-        height: int,
-        width: int
+        title: str
 ) -> None:
     """Display the detected components on the original image.
 
@@ -233,11 +199,9 @@ def show(
         The centroids of each of the detected components.
     title : str
         The title of the resultant window.
-    height : int
-        The height of the image.
-    width : int
-        The width of the image.
     """
+
+    global height, width, cam_x, cam_y
 
     # Assign the markers a hue between 0 and 179 (max H value)
     hue_markers = np.uint8(H_MAX * np.float32(markers) / np.max(markers))
@@ -251,13 +215,117 @@ def show(
     labelled_img = cv2.addWeighted(image, 0.5, labelled_img, 0.5, 0)
 
     # Label the centroid(s)
-    for i, centroid in enumerate(centroids):
-        if i < 2 or markers[markers == i].size == 0:
+    logger.info('Centroids to label: %s', np.unique(markers))
+    for marker in np.unique(markers)[1:]:
+        if marker == 1:
             continue
-        x, y = map(int, centroid)
-        cv2.circle(labelled_img, (x, y), 15, (0, 0, 0), 2)
+
+        x, y = map(int, centroids[marker - 1])
+        cv2.circle(
+            labelled_img, (x, y),
+            15, (255, 255, 255), 2
+        )
+
+    # Label the disposal and airlock regions
+    cv2.circle(
+        labelled_img, (cam_x, cam_y),
+        width // 2, (0, 0, 0), 2
+    )
+    cv2.circle(
+        labelled_img, (cam_x, cam_y),
+        width, (0, 0, 0), 2
+    )
 
     cv2.imshow(title, labelled_img)
+
+
+def find_red_rock(
+        image: MatLike,
+        *,
+        verbose: bool = False
+) -> None:
+    """Pipeline for finding red rock game elements.
+
+    Parameters
+    ----------
+    image : MatLike
+        The original image to find red rock game elements from.
+    verbose : bool, default=False
+        True to output the intermediate result(s), False otherwise.
+    """
+
+    global c_lower, c_upper
+
+    seg_mask = segment(
+        image, c_lower, c_upper,
+        invert=True,
+        title='red segmentation' if verbose else None
+    )
+    markers, stats, centroids = watershed(seg_mask)
+    markers = analyse(
+        markers, stats, centroids,
+        ROCK_AREA_THRESHOLD, False
+    )
+    show(image, markers, centroids, 'red')
+
+
+def find_blue_rock(
+        image: MatLike,
+        *,
+        verbose: bool = False
+) -> None:
+    """Pipeline for finding blue rock game elements.
+
+    Parameters
+    ----------
+    image : MatLike
+        The original image to find blue rock game elements from.
+    verbose : bool, default=False
+        True to output the intermediate result(s), False otherwise.
+    """
+
+    global b_lower, b_upper
+
+    seg_mask = segment(
+        image, b_lower, b_upper,
+        title='blue segmentation' if verbose else None
+    )
+    markers, stats, centroids = watershed(seg_mask)
+    markers = analyse(
+        markers, stats, centroids,
+        ROCK_AREA_THRESHOLD, False
+    )
+    show(image, markers, centroids, 'blue')
+
+
+def find_white_pebble(
+        image: MatLike,
+        *,
+        verbose: bool = False
+) -> None:
+    """Pipeline for finding white pebble game elements.
+
+    Parameters
+    ----------
+    image : MatLike
+        The original image to find white pebble game elements from.
+    verbose : bool, default=False
+        True to output the intermediate result(s), False otherwise.
+    """
+
+    global w_lower, w_upper
+
+    seg_mask = segment(
+        image, w_lower, w_upper,
+        hsl=True,
+        title='white segmentation' if verbose else None
+    )
+    markers, stats, centroids = watershed(seg_mask)
+    markers = analyse(
+        markers, stats, centroids,
+        PEBBLE_AREA_THRESHOLD, True
+    )
+    show(image, markers, centroids, 'white')
 
 
 if __name__ == '__main__':
@@ -268,21 +336,15 @@ if __name__ == '__main__':
     # Define colours to detect
     blue = np.uint8([[[255, 0, 0]]])
     cyan = np.uint8([[[255, 255, 0]]])  # For detecting red via inverse HSV
-    #white = np.uint8([[[255, 255, 255]]])
+    # white to be detected via HSL
 
     # Define lower and upper boundaries
     b_lower, b_upper = getBound(blue)
-    c_lower, c_upper = getBound(cyan)
+    c_lower, c_upper = getBound(cyan, var=15)
     # w_lower, w_upper = getBound(white)
-    w_lower = np.array([0, 0, 168])  # Manual boundary setting for white
-    w_upper = np.array([172, 111, 255])
+    w_lower = np.array([70, 180, 0])  # Manual boundary setting for white
+    w_upper = np.array([179, 255, 255])
 
-    # Define mapping
-    mapping = {
-        'red': ((c_lower, c_upper, True), ROCK_AREA_THRESHOLD, (DISPOSAL_THRESHOLD, AIRLOCK_THRESHOLD)),
-        'blue': ((b_lower, b_upper, False), ROCK_AREA_THRESHOLD, (DISPOSAL_THRESHOLD, AIRLOCK_THRESHOLD)),
-        'white': ((w_lower, w_upper, False), PEBBLE_AREA_THRESHOLD, (0, AIRLOCK_THRESHOLD))
-    }
     logger.info('Ready.')
 
     """
@@ -295,12 +357,13 @@ if __name__ == '__main__':
         elif cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
+        cam_x = (height - 1) * int(cam_corner >= BOTTOM_LEFT_CORNER)
+        cam_y = (width - 1) * (cam_corner % 2)
+
         # Detect red, blue, white
-        for colour, ((lower, upper, invert), area_thresh, (min_dist, max_dist)) in mapping.items():
-            seg_mask = segment(frame, lower, upper, invert)
-            _, markers, stats, centroids = watershed(seg_mask, height, width)
-            markers = analyse(markers, stats, centroids, area_thresh, min_dist, max_dist)
-            show(frame, markers, centroids, f'{colour} result', height, width)
+        find_red_rock(frame)
+        find_blue_rock(frame)
+        find_white_pebble(frame)
 
     logger.info('Exiting...')
     cap.release()
@@ -309,11 +372,14 @@ if __name__ == '__main__':
 
     image = cv2.imread('assets/sample.png')
     height, width = image.shape[:2]
-    for colour, ((lower, upper, invert), area_thresh, (min_dist, max_dist)) in mapping.items():
-        seg_mask = segment(image, lower, upper, invert)
-        _, markers, stats, centroids = watershed(seg_mask, height, width)
-        markers = analyse(markers, stats, centroids, area_thresh, min_dist, max_dist)
-        show(image, markers, centroids, f'{colour} result', height, width)
+    logger.info('Height: %i, Width: %i', height, width)
+
+    cam_x = (height - 1) * int(cam_corner >= BOTTOM_LEFT_CORNER)
+    cam_y = (width - 1) * (cam_corner % 2)
+
+    find_red_rock(image, verbose=VERBOSE)
+    find_blue_rock(image, verbose=VERBOSE)
+    find_white_pebble(image, verbose=VERBOSE)
 
     logger.info('Exiting...')
     cv2.waitKey(0)
