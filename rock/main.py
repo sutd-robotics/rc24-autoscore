@@ -11,8 +11,8 @@ logger = logging.getLogger(__name__)
 
 
 # Define constants
-PEBBLE_AREA_THRESHOLD = 3000
-ROCK_AREA_THRESHOLD = 5000
+PEBBLE_AREA_THRESHOLD = 250
+ROCK_AREA_THRESHOLD = 300
 
 
 # Define corners
@@ -202,6 +202,8 @@ def show(
     """
 
     global height, width, cam_x, cam_y
+    cv2.namedWindow(title, cv2.WINDOW_NORMAL)
+    # cv2.resizeWindow(title, 400, 400)
 
     # Assign the markers a hue between 0 and 179 (max H value)
     hue_markers = np.uint8(H_MAX * np.float32(markers) / np.max(markers))
@@ -229,11 +231,11 @@ def show(
     # Label the disposal and airlock regions
     cv2.circle(
         labelled_img, (cam_x, cam_y),
-        width // 2, (0, 0, 0), 2
+        height // 2, (0, 0, 0), 2
     )
     cv2.circle(
         labelled_img, (cam_x, cam_y),
-        width, (0, 0, 0), 2
+        height, (0, 0, 0), 2
     )
 
     cv2.imshow(title, labelled_img)
@@ -331,7 +333,7 @@ def find_white_pebble(
 if __name__ == '__main__':
     # Initalisation
     logger.info('Initialising...')
-    #cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(0)
 
     # Define colours to detect
     blue = np.uint8([[[255, 0, 0]]])
@@ -347,7 +349,6 @@ if __name__ == '__main__':
 
     logger.info('Ready.')
 
-    """
     while cap.isOpened():
         ret, frame = cap.read()
         height, width = frame.shape[:2]
@@ -356,9 +357,9 @@ if __name__ == '__main__':
             break
         elif cv2.waitKey(1) & 0xFF == ord('q'):
             break
-
-        cam_x = (height - 1) * int(cam_corner >= BOTTOM_LEFT_CORNER)
-        cam_y = (width - 1) * (cam_corner % 2)
+        print(height, width)
+        cam_y = (height - 1) * int(cam_corner >= BOTTOM_LEFT_CORNER) # originally cam_x
+        cam_x = (width - 1) * (cam_corner % 2) # originally cam_y
 
         # Detect red, blue, white
         find_red_rock(frame)
@@ -368,18 +369,18 @@ if __name__ == '__main__':
     logger.info('Exiting...')
     cap.release()
     cv2.destroyAllWindows()
-    """
 
-    image = cv2.imread('assets/sample.png')
-    height, width = image.shape[:2]
-    logger.info('Height: %i, Width: %i', height, width)
 
-    cam_x = (height - 1) * int(cam_corner >= BOTTOM_LEFT_CORNER)
-    cam_y = (width - 1) * (cam_corner % 2)
+    # image = cv2.imread('assets/sample.png')
+    # height, width = image.shape[:2]
+    # logger.info('Height: %i, Width: %i', height, width)
 
-    find_red_rock(image, verbose=VERBOSE)
-    find_blue_rock(image, verbose=VERBOSE)
-    find_white_pebble(image, verbose=VERBOSE)
+    # cam_x = (height - 1) * int(cam_corner >= BOTTOM_LEFT_CORNER)
+    # cam_y = (width - 1) * (cam_corner % 2)
 
-    logger.info('Exiting...')
-    cv2.waitKey(0)
+    # find_red_rock(image, verbose=VERBOSE)
+    # find_blue_rock(image, verbose=VERBOSE)
+    # find_white_pebble(image, verbose=VERBOSE)
+
+    # logger.info('Exiting...')
+    # cv2.waitKey(0)
