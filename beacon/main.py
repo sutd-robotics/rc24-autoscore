@@ -1,7 +1,10 @@
+from concurrent.futures import Future, ThreadPoolExecutor
 import logging
+from typing import Mapping, Optional, Tuple, Union
 
 import cv2
 from cv2.typing import MatLike
+import numpy as np
 from qreader import QReader
 
 
@@ -10,62 +13,42 @@ logging.basicConfig(level=logging.INFO)
 
 
 # Define constants
-RED = 'Red'
-BLUE = 'Blue'
+RED = 'RC2024_red_flag'
+BLUE = 'RC2024_blue_flag'
 
 
-def process_qr(image: MatLike, qreader: QReader) -> None:
-    """Performs QR detection and decoding on a given image.
+def process_qr(fn: Future) -> None:
 
-    Two QR codes are expected - one with content `RED` and one with content `BLUE`.
-    The function draws an appropriately-coloured bounding box around the QR code when detected.
+    logger.info('Waiting for processed QR(s)...')
+    res = fn.result()
+    logger.info('Decoded %s', res)
 
-    Parameters
-    ----------
-    image : MatLike
-        The image to perform QR detection on.
-    qreader : QReader
-        `QReader` ML class for QR detection and decoding.
+    if RED in res:
+        logger.info('Red detected')
+    if BLUE in res:
+        logger.info('Blue detected')
 
-    See Also
-    --------
-    https://pypi.org/project/qreader/
-    """
 
-    # Perform QR decoding
-    detections = qreader.detect_and_decode(
-        image,
-        return_detections=True,
-        is_bgr=True
-    )
+def decode_qr(
+        image: MatLike,
+        detections: Tuple[Mapping[str, Union[np.ndarray, float, Tuple[Union[float, int], Union[float, int]]]], ...]
+) -> Tuple[Optional[str], ...]:
 
-    # Process results
-    for i, (decoded_content, detection_stats) in enumerate(zip(*detections)):
-        logger.info(
-            'QR Code %i - Confidence: %f, Content: %s',
-            i + 1, detection_stats['confidence'], decoded_content
-        )
+    global QREADER
 
-        # Obtain and draw bounding box
-        x1, y1, x2, y2 = map(int, detection_stats['bbox_xyxy'])
-        cv2.rectangle(
-            image,
-            (x1, y1), (x2, y2),
-            (255 * int(decoded_content == BLUE), 0, 255 * int(decoded_content == RED)),
-            thickness=5
-        )
-
-    cv2.imshow('result', image)
+    logger.info('Decoding QR(s)...')
+    return tuple(QREADER.decode(image, detection) for detection in detections)
 
 
 if __name__ == '__main__':
     # Initialisation
     logger.info('Initialising...')
     QREADER = QReader(min_confidence=0.7)
-    # cap = cv2.VideoCapture(0)
+    EXECUTOR = ThreadPoolExecutor()
+    cap = cv2.VideoCapture(0)
+    #red = blue = False
     logger.info('Ready.')
 
-    """
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
@@ -74,14 +57,34 @@ if __name__ == '__main__':
         elif cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
-        process_qr(frame, QREADER)
+        # Perform preliminary detection
+        detections = QREADER.detect(frame, is_bgr=True)
+        if detections:
+
+            # If QR code(s) is/are detected, perform (heavy) decoding
+            decode_fn = EXECUTOR.submit(decode_qr, frame, detections)
+            _ = EXECUTOR.submit(process_qr, decode_fn)
+
+            # Obtain and draw bounding box
+            for detection_stats in detections:
+                x1, y1, x2, y2 = map(int, detection_stats['bbox_xyxy'])
+                cv2.rectangle(
+                    frame,
+                    (x1, y1), (x2, y2),
+                    (0, 0, 0),
+                    thickness=5
+                )
+
+        cv2.imshow('result', frame)
 
     logger.info('Exiting...')
+    EXECUTOR.shutdown(wait=False, cancel_futures=True)
     cap.release()
     cv2.destroyAllWindows()
-    """
 
+    """
     process_qr(cv2.imread('assets/sample.png'), QREADER)
 
     logger.info('Exiting...')
     cv2.waitKey(0)
+    """
