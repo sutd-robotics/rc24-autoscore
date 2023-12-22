@@ -115,7 +115,7 @@ def segment(
         hsl: bool = False,
         title: Optional[str] = None
 ) -> MatLike:
-    """Perform colour segmentation on a given HSV image based on a lower and upper bound.
+    """Perform colour segmentation on a given image based on a lower and upper bound.
 
     Parameters
     ----------
@@ -157,9 +157,36 @@ def segment(
     return cv2.bitwise_and(image, image, mask=mask)
 
 
+def process(image: MatLike, *, verbose: bool = False) -> None:
+    """Processes a given image to segment and display selected ranges of colour.
+
+    Parameters
+    ----------
+    image : MatLike
+        The image to process.
+    verbose : bool, default=False
+        True if the segmentation mask should be printed, False otherwise.
+
+    See Also
+    --------
+    `segment(image, lower, upper, *, invert, hsl, title)`
+    """
+
+    lower, upper = update(COLOUR)
+    seg_mask = segment(
+        image,
+        lower, upper,
+        invert=COLOUR == TUNE_RED,
+        hsl=COLOUR == TUNE_WHITE,
+        title=f'{["red", "blue", "white"][COLOUR]} segment' if verbose else None
+    )
+    cv2.imshow(TITLE, seg_mask)
+
+
 if __name__ == '__main__':
     logger.info('Initialising...')
     init(COLOUR)
+    verbose = False
     # cap = cv2.VideoCapture(0)
     logger.info('Ready.')
 
@@ -171,12 +198,8 @@ if __name__ == '__main__':
             break
         elif cv2.waitKey(1) & 0xFF == ord('q'):
             break
-        lower, upper = update(COLOUR)
-        seg_mask = segment(
-            image,
-            lower, upper
-        )
-        cv2.imshow(TITLE, seg_mask)
+
+        process(frame, verbose=verbose)
 
     logger.info('Exiting...')
     cap.release()
@@ -186,13 +209,8 @@ if __name__ == '__main__':
     while True:
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
-        lower, upper = update(COLOUR)
-        seg_mask = segment(
-            image,
-            lower, upper,
-            hsl=True
-        )
-        cv2.imshow(TITLE, seg_mask)
-    logger.info('Exiting...')
 
+        process(image, verbose=verbose)
+
+    logger.info('Exiting...')
     cv2.destroyAllWindows()

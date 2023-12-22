@@ -18,6 +18,21 @@ BLUE = 'RC2024_blue_flag'
 
 
 def process_qr(fn: Future) -> None:
+    """Processes the result of decoding QR code(s) in a given image.
+
+    The function expects and checks for (at most) two QR codes -
+    one with content `RED` and one with content `BLUE`.
+
+    Parameters
+    ----------
+    fn : Future
+        The thread decoding the QR code(s) in the image.
+        This function waits for the thread to complete and processes its result.
+
+    See Also
+    --------
+    `decode_qr(image, detections)`
+    """
 
     logger.info('Waiting for processed QR(s)...')
     res = fn.result()
@@ -31,13 +46,74 @@ def process_qr(fn: Future) -> None:
 
 def decode_qr(
         image: MatLike,
-        detections: Tuple[Mapping[str, Union[np.ndarray, float, Tuple[Union[float, int], Union[float, int]]]], ...]
+        detections: Tuple[Mapping[str, Union[np.ndarray, float, Tuple[
+            Union[float, int],
+            Union[float, int]
+        ]]], ...]
 ) -> Tuple[Optional[str], ...]:
+    """Performs QR decoding on detected instance(s) of QR code(s) in a given image.
 
-    global QREADER
+    This function should be run asynchronously as the decoding job is computationally intensive.
+
+    Parameters
+    ----------
+    image : MatLike
+        The given image to process and decode scanned QR code(s) on.
+    detections : Tuple[Mapping[str, Union[np.ndarray, float, Tuple[
+                     Union[float, int],
+                     Union[float, int]
+                 ]]], ...]
+        The detected QR code(s) and their respective statistics.
+
+    Returns
+    -------
+    Tuple[Optional[str], ...]
+        The content(s) of the decoded QR code(s), if any.
+
+    See Also
+    --------
+    https://pypi.org/project/qreader/
+    """
 
     logger.info('Decoding QR(s)...')
     return tuple(QREADER.decode(image, detection) for detection in detections)
+
+
+def detect_qr(image: MatLike) -> None:
+    """Performs QR detection in a given image.
+
+    If QR code(s) is/are detected, the function spawns another thread
+    and performs the decoding / processing job asynchronously.
+
+    Parameters
+    ----------
+    image : MatLike
+        The given image to detect QR code(s) on.
+
+    See Also
+    --------
+    `decode_qr(image, detections)`
+    """
+
+    # Perform preliminary detection
+    detections = QREADER.detect(image, is_bgr=True)
+    if detections:
+
+        # If QR code(s) is/are detected, perform (heavy) decoding
+        decode_fn = EXECUTOR.submit(decode_qr, image, detections)
+        _ = EXECUTOR.submit(process_qr, decode_fn)
+
+        # Obtain and draw bounding box
+        for detection_stats in detections:
+            x1, y1, x2, y2 = map(int, detection_stats['bbox_xyxy'])
+            cv2.rectangle(
+                image,
+                (x1, y1), (x2, y2),
+                (0, 0, 0),
+                thickness=5
+            )
+
+    cv2.imshow('result', image)
 
 
 if __name__ == '__main__':
@@ -57,25 +133,7 @@ if __name__ == '__main__':
         elif cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
-        # Perform preliminary detection
-        detections = QREADER.detect(frame, is_bgr=True)
-        if detections:
-
-            # If QR code(s) is/are detected, perform (heavy) decoding
-            decode_fn = EXECUTOR.submit(decode_qr, frame, detections)
-            _ = EXECUTOR.submit(process_qr, decode_fn)
-
-            # Obtain and draw bounding box
-            for detection_stats in detections:
-                x1, y1, x2, y2 = map(int, detection_stats['bbox_xyxy'])
-                cv2.rectangle(
-                    frame,
-                    (x1, y1), (x2, y2),
-                    (0, 0, 0),
-                    thickness=5
-                )
-
-        cv2.imshow('result', frame)
+        detect_qr(frame)
 
     logger.info('Exiting...')
     EXECUTOR.shutdown(wait=False, cancel_futures=True)
@@ -83,7 +141,7 @@ if __name__ == '__main__':
     cv2.destroyAllWindows()
 
     """
-    process_qr(cv2.imread('assets/sample.png'), QREADER)
+    detect_qr(cv2.imread('assets/sample.png'))
 
     logger.info('Exiting...')
     cv2.waitKey(0)
