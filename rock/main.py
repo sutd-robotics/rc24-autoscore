@@ -13,19 +13,19 @@ import numpy as np
 
 
 # Define debugging
-VERBOSE = False
+VERBOSE = True
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG if VERBOSE else logging.INFO)
 
 
 # Define constants
-PEBBLE_AREA_THRESHOLD = 250
-ROCK_AREA_THRESHOLD = 300
+PEBBLE_AREA_THRESHOLD = 150
+ROCK_AREA_THRESHOLD = 500
 
 
 # Define corners
 TOP_LEFT_CORNER, TOP_RIGHT_CORNER, BOTTOM_LEFT_CORNER, BOTTOM_RIGHT_CORNER = range(4)
-CAM_CORNER = BOTTOM_RIGHT_CORNER
+CAM_CORNER = TOP_LEFT_CORNER
 
 
 def getBound(
@@ -81,7 +81,8 @@ def watershed(mask: MatLike) -> Tuple[MatLike, MatLike, MatLike]:
     """
 
     # Perform Gaussian blur on mask
-    blur = cv2.GaussianBlur(mask, (7, 7), 2)
+    #blur = cv2.GaussianBlur(mask, (7, 7), 5)
+    blur = cv2.medianBlur(mask, 5)
 
     # Morphological gradient
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
@@ -89,7 +90,7 @@ def watershed(mask: MatLike) -> Tuple[MatLike, MatLike, MatLike]:
 
     # Binarize gradient
     lowerb = np.array([0, 0, 0])
-    upperb = np.array([15, 15, 15])
+    upperb = np.array([30, 30, 30])
     binary = cv2.inRange(gradient, lowerb, upperb)
 
     # Flood fill from the edges
@@ -128,15 +129,12 @@ def analyse(
         markers: MatLike,
         stats: MatLike,
         centroids: MatLike,
-        area_threshold: int,
-        region: bool
+        area_threshold: int
 ) -> MatLike:
     """Count number of detected rocks in image.
 
     The detected components are evaluated based on two criteria:
     - Area: The area of the component must meet the threshold.
-    - Distance: The distance of the component from the corner of playfield must be smaller
-                than the threshold(s) for airlock and/or disposal area.
 
     If a given component does not satisfy any of the criteria, the detection is nullified.
 
@@ -150,8 +148,6 @@ def analyse(
         The centroid of each detected component.
     area_threshold : int
         The minimum area of valid components.
-    region : bool
-        True if to detect in disposal, False to detect in airlock.
 
     Returns
     -------
@@ -159,23 +155,15 @@ def analyse(
         The markers of each pixel after filtering.
     """
 
-    min_distance = (0 if region else WIDTH // 2) ** 2
-    max_distance = (WIDTH // 2 if region else WIDTH) ** 2
-
     for marker, stat, centroid in zip(np.unique(markers)[1:], stats, centroids):
         # Obtain relevant statistics
         x, y = map(int, centroid)
         area = stat[cv2.CC_STAT_AREA]
 
         # Perform filtering
-        distance = (x - CAM_X) * (x - CAM_X) + (y - CAM_Y) * (y - CAM_Y)
-        if area < area_threshold or not min_distance <= distance <= max_distance:
+        if area < area_threshold:
             markers[markers == marker] = -1
-        else:
-            logger.info(
-                'Contour %i: Position (%i, %i), Dist Squared %i, Area: %f',
-                marker, x, y, distance, area
-            )
+        logger.info('Contour %i: Position (%i, %i), Area: %f', marker, x, y, area)
 
     return markers
 
@@ -215,7 +203,6 @@ def show(
     labelled_img = cv2.addWeighted(image, 0.5, labelled_img, 0.5, 0)
 
     # Label the centroid(s)
-    logger.info('Centroids to label: %s', np.unique(markers))
     for marker in np.unique(markers)[1:]:
         if marker == 1:
             continue
@@ -227,15 +214,8 @@ def show(
         )
 
     # Label the disposal and airlock regions
-    cv2.circle(
-        labelled_img, (CAM_X, CAM_Y),
-        HEIGHT // 2, (0, 0, 0), 2
-    )
-    cv2.circle(
-        labelled_img, (CAM_X, CAM_Y),
-        HEIGHT, (0, 0, 0), 2
-    )
-
+    cv2.ellipse(disposal_mask, (cam_x, cam_y), DISPOSAL, 0, 0, 360, 0, 3)
+    cv2.ellipse(disposal_mask, (cam_x, cam_y), AIRLOCK, 0, 0, 360, 0, 3)
     cv2.imshow(title, labelled_img)
 
 
@@ -282,12 +262,29 @@ def find(
         hsl=colour == TUNE_WHITE,
         title=f'{title_str} segment' if verbose else None
     )
+
     markers, stats, centroids = watershed(seg_mask)
     markers = analyse(
         markers, stats, centroids,
-        PEBBLE_AREA_THRESHOLD if colour == TUNE_WHITE else ROCK_AREA_THRESHOLD,
-        colour == TUNE_WHITE
+        PEBBLE_AREA_THRESHOLD if colour == TUNE_WHITE else ROCK_AREA_THRESHOLD
     )
+
+    """
+    circles = cv2.HoughCircles(
+        cv2.cvtColor(seg_mask, cv2.COLOR_BGR2GRAY),
+        cv2.HOUGH_GRADIENT, 1, HEIGHT / 8,
+        param1=30, param2=15,
+        minRadius=20, maxRadius=30
+    )
+    if circles is None:
+        return
+
+    result = image.copy()
+    circles = np.uint16(np.around(circles))
+    for x, y, r, *_ in circles[0, :]:
+        cv2.circle(result, (x, y), r, 255, 3)
+    cv2.imshow(f'{title_str} result', result)
+    """
 
     # Display results
     show(image, markers, centroids, title_str)
@@ -304,30 +301,48 @@ if __name__ == '__main__':
     # white to be detected via HSL
 
     # Define lower and upper boundaries
-    B_LOWER, B_UPPER = getBound(blue)
-    C_LOWER, C_UPPER = getBound(cyan, var=15)
+    B_LOWER, B_UPPER = getBound(blue, var=30)
+    C_LOWER, C_UPPER = getBound(cyan, var=10)
     # W_LOWER, W_UPPER = getBound(white)
-    W_LOWER = np.array([70, 180, 0])  # Manual boundary setting for white
-    W_UPPER = np.array([179, 255, 255])
+    W_LOWER = np.array([70, 180, 100])  # Manual boundary setting for white
+    W_UPPER = np.array([255, 255, 255])
 
     logger.info('Ready.')
 
     while cap.isOpened():
         ret, frame = cap.read()
-        HEIGHT, WIDTH = frame.shape[:2]
+        try:
+            HEIGHT, WIDTH = frame.shape[:2]
+        except AttributeError as error:
+            logger.error('Unexpected frame %s throws AttributeError: %s', frame, error)
+            continue
         if not ret:
             logger.warning('Unable to receive frame.')
             break
         elif cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
-        CAM_X = (WIDTH - 1) * (CAM_CORNER % 2)
-        CAM_Y = (HEIGHT - 1) * int(CAM_CORNER >= BOTTOM_LEFT_CORNER)
+        cam_x = (WIDTH - 1) * (CAM_CORNER % 2)
+        cam_y = (HEIGHT - 1) * int(CAM_CORNER >= BOTTOM_LEFT_CORNER)
+        DISPOSAL = (650, 500)
+        AIRLOCK = (1150, 950)
+
+        # Create ellipses as boundary measurement
+        disposal_mask = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
+        cv2.ellipse(disposal_mask, (cam_x, cam_y), DISPOSAL, 0,  0, 360, 255, -1)
+        disposal_img = cv2.bitwise_and(frame, frame, mask=disposal_mask)
+        #cv2.imshow('disposal', disposal_img)
+
+        airlock_mask = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
+        cv2.ellipse(airlock_mask, (cam_x, cam_y), AIRLOCK, 0, 0, 360, 255, -1)
+        cv2.ellipse(airlock_mask, (cam_x, cam_y), DISPOSAL, 0, 0, 360, 0, -1)
+        airlock_img = cv2.bitwise_and(frame, frame, mask=airlock_mask)
+        #cv2.imshow('airlock', airlock_img)
 
         # Detect red, blue, white
-        find(frame, TUNE_RED, verbose=VERBOSE)
-        find(frame, TUNE_BLUE, verbose=VERBOSE)
-        find(frame, TUNE_WHITE, verbose=VERBOSE)
+        find(airlock_img, TUNE_RED, verbose=VERBOSE)
+        find(airlock_img, TUNE_BLUE, verbose=VERBOSE)
+        find(disposal_img, TUNE_WHITE, verbose=VERBOSE)
 
     logger.info('Exiting...')
     cap.release()
