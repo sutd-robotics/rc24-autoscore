@@ -1,4 +1,5 @@
 import logging
+import socket
 from typing import Tuple
 
 from tune import (
@@ -13,7 +14,7 @@ import numpy as np
 
 
 # Define debugging
-VERBOSE = True
+VERBOSE = False
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG if VERBOSE else logging.INFO)
 
@@ -21,11 +22,13 @@ logging.basicConfig(level=logging.DEBUG if VERBOSE else logging.INFO)
 # Define constants
 PEBBLE_AREA_THRESHOLD = 150
 ROCK_AREA_THRESHOLD = 500
+HOST = '10.12.148.28'
+PORT = 12345
 
 
 # Define corners
 TOP_LEFT_CORNER, TOP_RIGHT_CORNER, BOTTOM_LEFT_CORNER, BOTTOM_RIGHT_CORNER = range(4)
-CAM_CORNER = TOP_LEFT_CORNER
+CAM_CORNER = TOP_RIGHT_CORNER
 
 
 def getBound(
@@ -90,7 +93,7 @@ def watershed(mask: MatLike) -> Tuple[MatLike, MatLike, MatLike]:
 
     # Binarize gradient
     lowerb = np.array([0, 0, 0])
-    upperb = np.array([30, 30, 30])
+    upperb = np.array([25, 25, 25])
     binary = cv2.inRange(gradient, lowerb, upperb)
 
     # Flood fill from the edges
@@ -163,7 +166,7 @@ def analyse(
         # Perform filtering
         if area < area_threshold:
             markers[markers == marker] = -1
-        logger.info('Contour %i: Position (%i, %i), Area: %f', marker, x, y, area)
+        #logger.info('Contour %i: Position (%i, %i), Area: %f', marker, x, y, area)
 
     return markers
 
@@ -224,7 +227,7 @@ def find(
         colour: int,
         *,
         verbose: bool = False
-) -> None:
+) -> int:
     """Pipeline for finding rocks of a specified colour.
 
     Colour detection follows the following pipeline:
@@ -239,6 +242,11 @@ def find(
         Expecting one of `TUNE_RED`, `TUNE_BLUE`, or `TUNE_WHITE`.
     verbose : bool, default=False
         True to output the intermediate result(s), False otherwise.
+
+    Returns
+    -------
+    int
+        The number of rocks detected.
 
     See Also
     --------
@@ -288,12 +296,18 @@ def find(
 
     # Display results
     show(image, markers, centroids, title_str)
+    return len(set(np.unique(markers)[1:]) - {1})
 
 
 if __name__ == '__main__':
     # Initalisation
     logger.info('Initialising...')
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(1)
+
+    # Define socket
+    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    client_socket.connect((HOST, PORT))
+    logger.info('Sending out connections on %s:%i', HOST, PORT)
 
     # Define colours to detect
     blue = np.uint8([[[255, 0, 0]]])
@@ -324,8 +338,8 @@ if __name__ == '__main__':
 
         cam_x = (WIDTH - 1) * (CAM_CORNER % 2)
         cam_y = (HEIGHT - 1) * int(CAM_CORNER >= BOTTOM_LEFT_CORNER)
-        DISPOSAL = (650, 500)
-        AIRLOCK = (1150, 950)
+        DISPOSAL = (610, 470)
+        AIRLOCK = (1080, 875)
 
         # Create ellipses as boundary measurement
         disposal_mask = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
@@ -340,9 +354,11 @@ if __name__ == '__main__':
         #cv2.imshow('airlock', airlock_img)
 
         # Detect red, blue, white
-        find(airlock_img, TUNE_RED, verbose=VERBOSE)
-        find(airlock_img, TUNE_BLUE, verbose=VERBOSE)
-        find(disposal_img, TUNE_WHITE, verbose=VERBOSE)
+        red = find(airlock_img, TUNE_RED, verbose=VERBOSE)
+        blue = find(airlock_img, TUNE_BLUE, verbose=VERBOSE)
+        white = find(disposal_img, TUNE_WHITE, verbose=VERBOSE)
+
+        client_socket.send(f'RR={red};RB={blue};RW={white}'.encode())
 
     logger.info('Exiting...')
     cap.release()
