@@ -121,9 +121,15 @@ if __name__ == '__main__':
     logger.info('Initialising...')
     QREADER = QReader(min_confidence=0.7)
     EXECUTOR = ThreadPoolExecutor()
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(1, cv2.CAP_DSHOW) # this is the magic!
+
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+    print(cap.read()[1].shape)
     #red = blue = False
     logger.info('Ready.')
+
+    cv2.namedWindow('result', cv2.WINDOW_KEEPRATIO)
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -133,6 +139,7 @@ if __name__ == '__main__':
         elif cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
+        frame = cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
         detect_qr(frame)
 
     logger.info('Exiting...')
