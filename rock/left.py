@@ -22,7 +22,7 @@ logging.basicConfig(level=logging.DEBUG if VERBOSE else logging.INFO)
 # Define constants
 PEBBLE_AREA_THRESHOLD = 150
 ROCK_AREA_THRESHOLD = 500
-HOST = '10.12.148.28'
+HOST = '192.168.1.120'
 PORT = 12345
 
 
@@ -310,12 +310,12 @@ if __name__ == '__main__':
     logger.info('Sending out connections on %s:%i', HOST, PORT)
 
     # Define colours to detect
-    blue = np.uint8([[[255, 0, 0]]])
+    blue_colour = np.uint8([[[255, 0, 0]]])
     cyan = np.uint8([[[255, 255, 0]]])  # For detecting red via inverse HSV
     # white to be detected via HSL
 
     # Define lower and upper boundaries
-    B_LOWER, B_UPPER = getBound(blue, var=30)
+    B_LOWER, B_UPPER = getBound(blue_colour, var=30)
     C_LOWER, C_UPPER = getBound(cyan, var=10)
     # W_LOWER, W_UPPER = getBound(white)
     W_LOWER = np.array([70, 180, 100])  # Manual boundary setting for white
@@ -332,14 +332,14 @@ if __name__ == '__main__':
             continue
         if not ret:
             logger.warning('Unable to receive frame.')
-            break
+            continue
         elif cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
         cam_x = (WIDTH - 1) * (CAM_CORNER % 2)
         cam_y = (HEIGHT - 1) * int(CAM_CORNER >= BOTTOM_LEFT_CORNER)
         DISPOSAL = (610, 520)
-        AIRLOCK = (1080, 975)
+        AIRLOCK = (1100, 950)
 
         # Create ellipses as boundary measurement
         disposal_mask = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
@@ -349,13 +349,13 @@ if __name__ == '__main__':
 
         airlock_mask = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
         cv2.ellipse(airlock_mask, (cam_x, cam_y), AIRLOCK, 0, 0, 360, 255, -1)
-        cv2.ellipse(airlock_mask, (cam_x, cam_y), DISPOSAL, 0, 0, 360, 0, -1)
+        #cv2.ellipse(airlock_mask, (cam_x, cam_y), DISPOSAL, 0, 0, 360, 0, -1)
         airlock_img = cv2.bitwise_and(frame, frame, mask=airlock_mask)
         #cv2.imshow('airlock', airlock_img)
 
         # Detect red, blue, white
         red = find(airlock_img, TUNE_RED, verbose=VERBOSE)
-        blue = find(airlock_img, TUNE_BLUE, verbose=VERBOSE)
+        blue = find(disposal_img, TUNE_BLUE, verbose=VERBOSE)
         white = find(disposal_img, TUNE_WHITE, verbose=VERBOSE)
 
         client_socket.send(f'LR={red};LB={blue};LW={white}'.encode())
