@@ -1,10 +1,12 @@
+# Refinery does not account for white rocks
+
 import logging
-# import socket
+import socket
 from typing import Tuple
 
 from tune import (
     H_MAX, S_MAX, V_MAX,
-    TUNE_RED, TUNE_BLUE, TUNE_WHITE,
+    TUNE_RED, TUNE_BLUE,
     segment
 )
 
@@ -20,10 +22,10 @@ logging.basicConfig(level=logging.DEBUG if VERBOSE else logging.INFO)
 
 
 # Define constants
-PEBBLE_AREA_THRESHOLD = 5000
-ROCK_AREA_THRESHOLD = 20000
-# HOST = '10.12.148.28'
-# PORT = 12345
+# PEBBLE_AREA_THRESHOLD = 20
+ROCK_AREA_THRESHOLD = 2000
+HOST = '192.168.1.120'
+PORT = 9998
 
 
 # Define corners
@@ -166,7 +168,7 @@ def analyse(
         # Perform filtering
         if area < area_threshold:
             markers[markers == marker] = -1
-        logger.info('Contour %i: Position (%i, %i), Area: %f', marker, x, y, area)
+        # logger.info('Contour %i: Position (%i, %i), Area: %f', marker, x, y, area)
 
     return markers
 
@@ -192,7 +194,10 @@ def show(
     """
 
     cv2.namedWindow(title, cv2.WINDOW_NORMAL)
-    # cv2.resizeWindow(title, 400, 400)
+    # cap = cv2.VideoCapture(0, cv2.CAP_DSHOW) # this is the magic!
+
+    # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+    # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
 
     # Assign the markers a hue between 0 and 179 (max H value)
     hue_markers = np.uint8(H_MAX * np.float32(markers) / np.max(markers))
@@ -256,25 +261,25 @@ def find(
     """
 
     # Perform sanity checking
-    if not colour in (TUNE_RED, TUNE_BLUE, TUNE_WHITE):
-        logger.error('colour=%i should be one of TUNE_RED, TUNE_BLUE, or TUNE_WHITE', colour)
+    if not colour in (TUNE_RED, TUNE_BLUE):
+        logger.error('colour=%i should be one of TUNE_RED, TUNE_BLUE', colour)
         return
     title_str = ['red', 'blue', 'white'][colour]
 
     # Perform colour detection
     seg_mask = segment(
         image,
-        [C_LOWER, B_LOWER, W_LOWER][colour],
-        [C_UPPER, B_UPPER, W_UPPER][colour],
+        [C_LOWER, B_LOWER][colour],
+        [C_UPPER, B_UPPER][colour],
         invert=colour == TUNE_RED,
-        hsl=colour == TUNE_WHITE,
+        # hsl=colour == TUNE_WHITE,
         title=f'{title_str} segment' if verbose else None
     )
 
     markers, stats, centroids = watershed(seg_mask)
     markers = analyse(
         markers, stats, centroids,
-        PEBBLE_AREA_THRESHOLD if colour == TUNE_WHITE else ROCK_AREA_THRESHOLD
+        ROCK_AREA_THRESHOLD
     )
 
     """
@@ -304,8 +309,8 @@ if __name__ == '__main__':
     logger.info('Initialising...')
     cap = cv2.VideoCapture(1)
 
-    # # Define socket
-    # client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # Define socket
+    client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     # client_socket.connect((HOST, PORT))
     # logger.info('Sending out connections on %s:%i', HOST, PORT)
 
@@ -318,8 +323,8 @@ if __name__ == '__main__':
     B_LOWER, B_UPPER = getBound(blue, var=30)
     C_LOWER, C_UPPER = getBound(cyan, var=10)
     # W_LOWER, W_UPPER = getBound(white)
-    W_LOWER = np.array([70, 180, 100])  # Manual boundary setting for white
-    W_UPPER = np.array([255, 255, 255])
+    # W_LOWER = np.array([160, 0, 240])  # Manual boundary setting for white
+    # W_UPPER = np.array([255, 255, 255])
 
     logger.info('Ready.')
 
@@ -336,8 +341,8 @@ if __name__ == '__main__':
         elif cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
-        cam_x = (WIDTH - 1) * (CAM_CORNER % 2)
-        cam_y = (HEIGHT - 1) * int(CAM_CORNER >= BOTTOM_LEFT_CORNER)
+        # cam_x = (WIDTH - 1) * (CAM_CORNER % 2)
+        # cam_y = (HEIGHT - 1) * int(CAM_CORNER >= BOTTOM_LEFT_CORNER)
         # DISPOSAL = (610, 520)
         # AIRLOCK = (1080, 975)
 
@@ -356,9 +361,9 @@ if __name__ == '__main__':
         # Detect red, blue, white
         red = find(frame, TUNE_RED, verbose=VERBOSE)
         blue = find(frame, TUNE_BLUE, verbose=VERBOSE)
-        white = find(frame, TUNE_WHITE, verbose=VERBOSE)
-        logger.info(f'Red={red}; Blue={blue}; White={white}')
-        # client_socket.send(f'LR={red};LB={blue};LW={white}'.encode())
+        # white = find(frame, TUNE_WHITE, verbose=VERBOSE)
+        logger.info(f'Red={red}; Blue={blue}')
+        client_socket.sendto(bytes(f'Red={red}; Blue={blue}', 'utf-8'), (HOST, PORT))
 
     logger.info('Exiting...')
     cap.release()
