@@ -1,5 +1,3 @@
-# Refinery does not account for white rocks
-
 import logging
 import socket
 from typing import Tuple
@@ -22,7 +20,6 @@ logging.basicConfig(level=logging.DEBUG if VERBOSE else logging.INFO)
 
 
 # Define constants
-# PEBBLE_AREA_THRESHOLD = 20
 ROCK_AREA_THRESHOLD = 2000
 HOST = '192.168.1.120'
 PORT = 9998
@@ -168,7 +165,6 @@ def analyse(
         # Perform filtering
         if area < area_threshold:
             markers[markers == marker] = -1
-        # logger.info('Contour %i: Position (%i, %i), Area: %f', marker, x, y, area)
 
     return markers
 
@@ -194,10 +190,6 @@ def show(
     """
 
     cv2.namedWindow(title, cv2.WINDOW_NORMAL)
-    # cap = cv2.VideoCapture(0, cv2.CAP_DSHOW) # this is the magic!
-
-    # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-    # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
 
     # Assign the markers a hue between 0 and 179 (max H value)
     hue_markers = np.uint8(H_MAX * np.float32(markers) / np.max(markers))
@@ -220,12 +212,6 @@ def show(
             labelled_img, (x, y),
             15, (255, 255, 255), 2
         )
-
-    # # Label the disposal and airlock regions
-    # cv2.ellipse(disposal_mask, (cam_x, cam_y), DISPOSAL, 0, 0, 360, 0, 3)
-    # cv2.ellipse(disposal_mask, (cam_x, cam_y), AIRLOCK, 0, 0, 360, 0, 3)
-    # cv2.imshow(title, labelled_img)
-
 
 def find(
         image: MatLike,
@@ -272,7 +258,6 @@ def find(
         [C_LOWER, B_LOWER][colour],
         [C_UPPER, B_UPPER][colour],
         invert=colour == TUNE_RED,
-        # hsl=colour == TUNE_WHITE,
         title=f'{title_str} segment' if verbose else None
     )
 
@@ -282,23 +267,6 @@ def find(
         ROCK_AREA_THRESHOLD
     )
 
-    """
-    circles = cv2.HoughCircles(
-        cv2.cvtColor(seg_mask, cv2.COLOR_BGR2GRAY),
-        cv2.HOUGH_GRADIENT, 1, HEIGHT / 8,
-        param1=30, param2=15,
-        minRadius=20, maxRadius=30
-    )
-    if circles is None:
-        return
-
-    result = image.copy()
-    circles = np.uint16(np.around(circles))
-    for x, y, r, *_ in circles[0, :]:
-        cv2.circle(result, (x, y), r, 255, 3)
-    cv2.imshow(f'{title_str} result', result)
-    """
-
     # Display results
     show(image, markers, centroids, title_str)
     return len(set(np.unique(markers)[1:]) - {1})
@@ -307,26 +275,22 @@ def find(
 if __name__ == '__main__':
     # Initalisation
     logger.info('Initialising...')
-    cap = cv2.VideoCapture(1)
+    cap = cv2.VideoCapture(1) # 1 for external camera (USB)
 
     # Define socket
-    client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    # client_socket.connect((HOST, PORT))
-    # logger.info('Sending out connections on %s:%i', HOST, PORT)
+    client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) # DGRAM for UDP
 
     # Define colours to detect
     blue = np.uint8([[[255, 0, 0]]])
     cyan = np.uint8([[[255, 255, 0]]])  # For detecting red via inverse HSV
-    # white to be detected via HSL
 
     # Define lower and upper boundaries
     B_LOWER, B_UPPER = getBound(blue, var=30)
     C_LOWER, C_UPPER = getBound(cyan, var=10)
-    # W_LOWER, W_UPPER = getBound(white)
-    # W_LOWER = np.array([160, 0, 240])  # Manual boundary setting for white
-    # W_UPPER = np.array([255, 255, 255])
 
     logger.info('Ready.')
+
+    prev_red, prev_blue = None, None
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -341,47 +305,14 @@ if __name__ == '__main__':
         elif cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
-        # cam_x = (WIDTH - 1) * (CAM_CORNER % 2)
-        # cam_y = (HEIGHT - 1) * int(CAM_CORNER >= BOTTOM_LEFT_CORNER)
-        # DISPOSAL = (610, 520)
-        # AIRLOCK = (1080, 975)
-
-        # # Create ellipses as boundary measurement
-        # disposal_mask = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
-        # cv2.ellipse(disposal_mask, (cam_x, cam_y), DISPOSAL, 0,  0, 360, 255, -1)
-        # disposal_img = cv2.bitwise_and(frame, frame, mask=disposal_mask)
-        # #cv2.imshow('disposal', disposal_img)
-
-        # airlock_mask = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
-        # cv2.ellipse(airlock_mask, (cam_x, cam_y), AIRLOCK, 0, 0, 360, 255, -1)
-        # cv2.ellipse(airlock_mask, (cam_x, cam_y), DISPOSAL, 0, 0, 360, 0, -1)
-        # airlock_img = cv2.bitwise_and(frame, frame, mask=airlock_mask)
-        # #cv2.imshow('airlock', airlock_img)
-
         # Detect red, blue, white
         red = find(frame, TUNE_RED, verbose=VERBOSE)
         blue = find(frame, TUNE_BLUE, verbose=VERBOSE)
-        # white = find(frame, TUNE_WHITE, verbose=VERBOSE)
-        logger.info(f'Red={red}; Blue={blue}')
-        client_socket.sendto(bytes(f'Red={red}; Blue={blue}', 'utf-8'), (HOST, PORT))
+        if red != prev_red or blue != prev_blue:
+            logger.info(f'Red={red}; Blue={blue}')
+            client_socket.sendto(bytes(f'Red={red}; Blue={blue}', 'utf-8'), (HOST, PORT))
+            prev_red, prev_blue = red, blue
 
     logger.info('Exiting...')
     cap.release()
     cv2.destroyAllWindows()
-
-    """
-    image = cv2.imread('assets/sample.png')
-    HEIGHT, WIDTH = image.shape[:2]
-    logger.info('Height: %i, Width: %i', HEIGHT, WIDTH)
-
-    CAM_X = (WIDTH - 1) * (CAM_CORNER % 2)
-    CAM_Y = (HEIGHT - 1) * int(CAM_CORNER >= BOTTOM_LEFT_CORNER)
-
-    # Detect red, blue, white
-    find(image, TUNE_RED, verbose=VERBOSE)
-    find(image, TUNE_BLUE, verbose=VERBOSE)
-    find(image, TUNE_WHITE, verbose=VERBOSE)
-
-    logger.info('Exiting...')
-    cv2.waitKey(0)
-    """
