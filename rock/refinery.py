@@ -84,7 +84,7 @@ def watershed(mask: MatLike) -> Tuple[MatLike, MatLike, MatLike]:
 
     # Perform Gaussian blur on mask
     #blur = cv2.GaussianBlur(mask, (7, 7), 5)
-    blur = cv2.medianBlur(mask, 5)
+    blur = cv2.medianBlur(mask, 11)
 
     # Morphological gradient
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
@@ -275,7 +275,7 @@ def find(
 if __name__ == '__main__':
     # Initalisation
     logger.info('Initialising...')
-    cap = cv2.VideoCapture(1) # 1 for external camera (USB)
+    cap = cv2.VideoCapture(0) # 1 for external camera (USB)
 
     # Define socket
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) # DGRAM for UDP
