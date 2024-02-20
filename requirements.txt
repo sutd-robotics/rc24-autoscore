@@ -5,7 +5,7 @@ charset-normalizer==3.3.2
 click==8.1.7
 contourpy==1.2.0
 cycler==0.12.1
-Django==4.2.7
+Django==4.2.10
 filelock==3.13.1
 fonttools==4.46.0
 fsspec==2023.12.2
